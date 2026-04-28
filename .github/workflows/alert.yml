@@ -1,0 +1,26 @@
+name: Option Chain Telegram Alert
+
+on:
+  schedule:
+    # Runs every 10 minutes, Mon–Fri (9:00 AM to 4:00 PM IST = UTC 3:30 to 10:30)
+    - cron: '*/10 3-10 * * 1-5'
+  workflow_dispatch:  # allows manual trigger from GitHub UI anytime
+
+jobs:
+  send-alert:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run alert script
+        run: python alert.py
