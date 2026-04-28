@@ -1,4 +1,8 @@
-matplotlib
 streamlit
-requests
 pandas
+requests
+pytz
+Pillow
+numpy
+matplotlib
+openpyxl
