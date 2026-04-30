@@ -15,14 +15,15 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: "3.12"  # CRITICAL: Changed from 3.11 to 3.12
+              python-version: '3.12'
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip setuptools wheel
-          pip install pandas pandas_ta requests dhanhq pytz
+          pip install --upgrade pip
+          pip install pandas requests dhanhq pytz
+          pip install git+https://github.com/twopirllc/pandas-ta.git
 
       - name: Run Crude Oil scanner
         env:
