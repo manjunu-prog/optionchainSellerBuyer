@@ -1,34 +1,33 @@
-name: Crude Oil Strike Scanner
+name: Crude Oil ATM ±5 Scan
 
 on:
   schedule:
-    # MCX Market Hours: 09:00 to 23:50 IST (UTC 03:30 to 18:20)
-    - cron: "0,3,6,9,12,15,18,21,24,27,30,33,36,39,42,45,48,51,54,57 3-18 * * 1-5"
+    - cron: "*/3 * * * 1-5"   # Runs every 3 minutes (Mon–Fri)
   workflow_dispatch:
 
 jobs:
-  scan:
-    name: Crude Oil ATM ±5 Scan
+  run-scanner:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-              python-version: '3.12'
+          python-version: "3.11"   # Stable version (no pandas_ta needed now)
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install pandas requests dhanhq pytz
-          pip install git+https://github.com/twopirllc/pandas-ta.git
 
-      - name: Run Crude Oil scanner
+      - name: Run Crude Scanner
         env:
           DHAN_ACCESS_TOKEN: ${{ secrets.DHAN_ACCESS_TOKEN }}
-          DHAN_CLIENT_ID:    ${{ secrets.DHAN_CLIENT_ID }}
-          TELEGRAM_TOKEN:    ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID:  ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python crude_strike_scanner.py
+          DHAN_CLIENT_ID: ${{ secrets.DHAN_CLIENT_ID }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python crude_strike_scanner.py
