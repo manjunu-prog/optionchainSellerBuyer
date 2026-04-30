@@ -6,3 +6,5 @@ Pillow
 numpy
 matplotlib
 openpyxl
+pandas_ta
+dhanhq
