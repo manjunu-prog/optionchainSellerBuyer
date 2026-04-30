@@ -26,13 +26,13 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"  # Update from 3.11 to 3.12
+          python-version: "3.12" # Change from 3.11 to 3.12
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          pip install pandas==2.2.2  # Using a stable version for technical analysis
-          pip install git+https://github.com/twopirllc/pandas-ta.git@development
+          python -m pip install --upgrade pip
+          pip install pandas  
+          pip install pandas_ta
           pip install requests dhanhq pytz
 
       - name: Run Crude Oil scanner
