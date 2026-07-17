@@ -754,24 +754,25 @@ def inject_style() -> None:
         """
         <style>
         :root {
-            --bg: #f7f2eb;
-            --bg-2: #eef3f8;
-            --panel: rgba(255, 255, 255, 0.84);
-            --panel-strong: rgba(255, 255, 255, 0.95);
-            --text: #1f2937;
-            --muted: #6b7280;
-            --line: rgba(31, 41, 55, 0.12);
-            --good: #2f9e5b;
-            --good-bg: rgba(47, 158, 91, 0.12);
-            --bad: #d44949;
-            --bad-bg: rgba(212, 73, 73, 0.12);
-            --warn: #b88412;
-            --warn-bg: rgba(184, 132, 18, 0.12);
+            --bg: #fbfaf8;
+            --bg-2: #f4f1ec;
+            --panel: rgba(255, 255, 255, 0.94);
+            --panel-strong: rgba(255, 255, 255, 0.98);
+            --text: #5c5251;
+            --muted: #8f8684;
+            --line: rgba(104, 88, 84, 0.14);
+            --good: #55b65e;
+            --good-bg: rgba(85, 182, 94, 0.14);
+            --bad: #ef4d3f;
+            --bad-bg: rgba(239, 77, 63, 0.14);
+            --warn: #d6a421;
+            --warn-bg: rgba(214, 164, 33, 0.14);
+            --accent: #c63f2f;
         }
         .stApp {
             background:
-                radial-gradient(circle at top left, rgba(188, 76, 55, 0.14), transparent 28%),
-                radial-gradient(circle at top right, rgba(47, 158, 91, 0.12), transparent 26%),
+                radial-gradient(circle at top left, rgba(198, 63, 47, 0.10), transparent 28%),
+                radial-gradient(circle at top right, rgba(214, 164, 33, 0.08), transparent 26%),
                 linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
             color: var(--text);
         }
@@ -780,7 +781,7 @@ def inject_style() -> None:
             border: 1px solid var(--line);
             border-radius: 22px;
             background: var(--panel-strong);
-            box-shadow: 0 24px 70px rgba(15, 23, 42, 0.12);
+            box-shadow: 0 18px 40px rgba(69, 58, 56, 0.08);
             margin-bottom: 0.9rem;
         }
         .hero h1 {
@@ -798,7 +799,7 @@ def inject_style() -> None:
             padding: 0.32rem 0.72rem;
             border-radius: 999px;
             border: 1px solid var(--line);
-            background: rgba(127, 127, 127, 0.06);
+            background: rgba(255, 255, 255, 0.88);
             font-size: 0.82rem;
             font-weight: 700;
         }
@@ -809,8 +810,8 @@ def inject_style() -> None:
             background: var(--panel);
             min-height: 110px;
         }
-        .metric-good { background: linear-gradient(180deg, rgba(47, 158, 91, 0.16), var(--panel)); }
-        .metric-bad { background: linear-gradient(180deg, rgba(212, 73, 73, 0.16), var(--panel)); }
+        .metric-good { background: linear-gradient(180deg, rgba(85, 182, 94, 0.14), var(--panel)); }
+        .metric-bad { background: linear-gradient(180deg, rgba(239, 77, 63, 0.14), var(--panel)); }
         .metric-neutral { background: var(--panel); }
         .metric-label {
             color: var(--muted);
@@ -834,8 +835,8 @@ def inject_style() -> None:
             border: 1px solid var(--line);
             border-radius: 18px;
             padding: 0.85rem 0.95rem;
-            background: rgba(255, 255, 255, 0.72);
-            box-shadow: 0 12px 30px rgba(15, 23, 42, 0.05);
+            background: rgba(255, 255, 255, 0.9);
+            box-shadow: 0 12px 26px rgba(69, 58, 56, 0.04);
         }
         .mini-stat span {
             display: block;
@@ -851,15 +852,15 @@ def inject_style() -> None:
             font-size: 1.05rem;
             line-height: 1.25;
         }
-        .mini-good { border-color: rgba(47, 158, 91, 0.24); background: rgba(47, 158, 91, 0.08); }
-        .mini-bad { border-color: rgba(212, 73, 73, 0.24); background: rgba(212, 73, 73, 0.08); }
-        .mini-neutral { border-color: rgba(184, 132, 18, 0.24); background: rgba(184, 132, 18, 0.08); }
+        .mini-good { border-color: rgba(85, 182, 94, 0.22); background: rgba(85, 182, 94, 0.08); }
+        .mini-bad { border-color: rgba(239, 77, 63, 0.22); background: rgba(239, 77, 63, 0.08); }
+        .mini-neutral { border-color: rgba(214, 164, 33, 0.22); background: rgba(214, 164, 33, 0.08); }
         .section-card {
             border: 1px solid var(--line);
             border-radius: 20px;
-            background: rgba(255, 255, 255, 0.72);
+            background: rgba(255, 255, 255, 0.9);
             padding: 1rem 1rem 0.9rem;
-            box-shadow: 0 12px 30px rgba(15, 23, 42, 0.05);
+            box-shadow: 0 12px 26px rgba(69, 58, 56, 0.04);
         }
         .section-card-title {
             font-family: "Space Grotesk", sans-serif;
@@ -878,7 +879,7 @@ def inject_style() -> None:
         .bad { color: var(--bad); }
         .neutral { color: var(--warn); }
         div[data-testid="stSidebar"] {
-            background: rgba(248, 250, 252, 0.95) !important;
+            background: rgba(252, 250, 247, 0.98) !important;
             border-right: 1px solid var(--line);
         }
         div[data-testid="stSidebar"] *,
@@ -906,10 +907,45 @@ def inject_style() -> None:
             padding: 0.35rem 0.65rem;
             border-radius: 999px;
             border: 1px solid var(--line);
-            background: rgba(255, 255, 255, 0.72);
+            background: rgba(255, 255, 255, 0.92);
             margin: 0.18rem 0.25rem 0 0;
             font-size: 0.82rem;
             font-weight: 700;
+        }
+        div[data-testid="stToolbar"] {
+            visibility: hidden;
+        }
+        div[data-testid="stSidebar"] [role="radiogroup"] {
+            gap: 0.5rem;
+        }
+        div[data-testid="stSidebar"] [role="radio"] {
+            border-radius: 999px;
+        }
+        div[data-testid="stSidebar"] [data-baseweb="select"] > div {
+            border-color: var(--line) !important;
+            background: rgba(255, 255, 255, 0.95) !important;
+        }
+        div[data-testid="stSidebar"] input,
+        div[data-testid="stSidebar"] textarea {
+            background: rgba(255, 255, 255, 0.95) !important;
+            border-color: var(--line) !important;
+        }
+        button[kind="primary"] {
+            background: linear-gradient(135deg, var(--accent), #de5645) !important;
+            border: 1px solid rgba(198, 63, 47, 0.34) !important;
+            color: white !important;
+            box-shadow: 0 12px 26px rgba(198, 63, 47, 0.16) !important;
+        }
+        button[kind="secondary"] {
+            background: rgba(255, 255, 255, 0.92) !important;
+            border: 1px solid var(--line) !important;
+            color: var(--text) !important;
+        }
+        .stDataFrame thead th {
+            color: var(--muted) !important;
+        }
+        .stDataFrame tbody td {
+            color: var(--text) !important;
         }
         </style>
         """,
