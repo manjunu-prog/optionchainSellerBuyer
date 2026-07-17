@@ -97,6 +97,15 @@ def fmt_pct(value: Any, digits: int = 2) -> str:
         return "-"
 
 
+def fmt_signed_num(value: Any, digits: int = 0) -> str:
+    try:
+        num = float(value)
+        sign = "+" if num > 0 else ""
+        return f"{sign}{num:,.{digits}f}"
+    except Exception:
+        return "-"
+
+
 def strip_none(value: Any, default: str = "") -> str:
     text = str(value or "").strip()
     return text if text else default
@@ -325,6 +334,8 @@ def normalize_history_frame(frame: pd.DataFrame) -> pd.DataFrame:
             temp[col] = pd.to_numeric(temp[col], errors="coerce").fillna(0.0)
     if "selected_strikes_json" in temp.columns:
         temp["selected_strikes_json"] = temp["selected_strikes_json"].apply(parse_json_field)
+    if "option_chain_json" in temp.columns:
+        temp["option_chain_json"] = temp["option_chain_json"].apply(parse_json_field)
     if "payload_json" in temp.columns:
         temp["payload_json"] = temp["payload_json"].apply(parse_json_field)
     return temp
@@ -590,39 +601,115 @@ def store_snapshot(record: dict[str, Any]) -> None:
         conn.commit()
 
 
-def render_row(record: pd.Series, idx: int) -> dict[str, Any]:
+def _row_option_totals(record: pd.Series) -> dict[str, float]:
+    chain = parse_json_field(record.get("option_chain_json"))
+    if not isinstance(chain, list) or not chain:
+        return {"volume": 0.0, "ce_volume": 0.0, "pe_volume": 0.0}
+
+    ce_volume = 0.0
+    pe_volume = 0.0
+    for item in chain:
+        if not isinstance(item, dict):
+            continue
+        ce_volume += safe_float(item.get("CE Volume"))
+        pe_volume += safe_float(item.get("PE Volume"))
+    return {"volume": ce_volume + pe_volume, "ce_volume": ce_volume, "pe_volume": pe_volume}
+
+
+def render_row(record: pd.Series, idx: int, interval_minutes: int) -> dict[str, Any]:
     timestamp = pd.to_datetime(record["snapshot_ts"], errors="coerce")
     if pd.isna(timestamp):
         timestamp = pd.Timestamp.now(tz=IST)
     if timestamp.tzinfo is None:
         timestamp = timestamp.tz_localize(IST)
+    end_ts = timestamp + timedelta(minutes=interval_minutes)
+    if idx == 1:
+        date_time = f"{timestamp.strftime('%H:%M')}-EOD"
+    else:
+        date_time = f"{timestamp.strftime('%H:%M')}-{end_ts.strftime('%H:%M')}"
+
+    totals = _row_option_totals(record)
+    total_oi = safe_float(record["total_ce_oi"]) + safe_float(record["total_pe_oi"])
+    total_chng_in_oi = safe_float(record["ce_oi_change"]) + safe_float(record["pe_oi_change"])
+    oi_change = safe_float(record["diff_in_oi"])
+    level_break = strip_none(record.get("day_hl_break"), "-")
+    if level_break != "-" and record["direction_change"] >= 0:
+        level_break = f"{level_break} ↑"
+    elif level_break != "-":
+        level_break = f"{level_break} ↓"
+
     return {
         "#": idx,
-        "Date": timestamp.strftime("%d-%m-%Y"),
-        "Time": timestamp.strftime("%H:%M:%S"),
+        "Date Time": date_time,
+        "Total OI": total_oi,
+        "Total Chng. In OI": total_chng_in_oi,
+        "Day High": safe_float(record["session_high"]),
+        "Day Low": safe_float(record["session_low"]),
+        "Level Break": level_break,
+        "Volume": totals["volume"],
         "LTP": safe_float(record["underlying_ltp"]),
-        "Day H/L Break": strip_none(record.get("day_hl_break"), "-"),
-        "Chng. In Call OI": safe_float(record["ce_oi_change"]),
-        "Chng. In Put OI": safe_float(record["pe_oi_change"]),
-        "Diff. in OI": safe_float(record["diff_in_oi"]),
-        "Strength": safe_float(record["strength_pct"]),
-        "Direction of chng.": "↑" if safe_float(record["direction_change"]) > 0 else "↓" if safe_float(record["direction_change"]) < 0 else "→",
-        "Chng. In Direction": safe_float(record["chg_in_direction"]),
-        "Direction of chng. %": safe_float(record["direction_change_pct"]),
-        "Net PCR": safe_float(record["net_pcr"]),
-        "Day": timestamp.strftime("%d-%m-%Y"),
+        "LTP Change": safe_float(record["underlying_change"]),
+        "OI Change": oi_change,
     }
 
 
 def build_history_table(records: pd.DataFrame, interval_minutes: int) -> pd.DataFrame:
     if records.empty:
-        return pd.DataFrame(columns=["#", "Date", "Time", "LTP", "Day H/L Break", "Chng. In Call OI", "Chng. In Put OI", "Diff. in OI", "Strength", "Direction of chng.", "Chng. In Direction", "Direction of chng. %", "Net PCR", "Day"])
+        return pd.DataFrame(columns=["#", "Date Time", "Total OI", "Total Chng. In OI", "Day High", "Day Low", "Level Break", "Volume", "LTP", "LTP Change", "OI Change"])
 
     frame = records.sort_values("snapshot_ts").reset_index(drop=True)
     bucketed = bucket_rows(frame, interval_minutes)
     view = bucketed if len(bucketed) != len(frame) else frame
-    rows = [render_row(row, idx + 1) for idx, (_, row) in enumerate(view.iterrows())]
+    view = view.sort_values("snapshot_ts", ascending=False).reset_index(drop=True)
+    rows = [render_row(row, idx + 1, interval_minutes) for idx, (_, row) in enumerate(view.iterrows())]
     return pd.DataFrame(rows)
+
+
+def format_table_display(view: pd.DataFrame) -> pd.DataFrame:
+    if view.empty:
+        return view
+    display = view.copy()
+    display["Total OI"] = display["Total OI"].map(lambda x: fmt_num(x, 0))
+    display["Total Chng. In OI"] = display["Total Chng. In OI"].map(lambda x: fmt_signed_num(x, 0))
+    display["Day High"] = display["Day High"].map(lambda x: fmt_num(x, 2))
+    display["Day Low"] = display["Day Low"].map(lambda x: fmt_num(x, 2))
+    display["Volume"] = display["Volume"].map(lambda x: fmt_num(x, 0))
+    display["LTP"] = display["LTP"].map(lambda x: fmt_num(x, 2))
+    display["LTP Change"] = display["LTP Change"].map(lambda x: fmt_signed_num(x, 2))
+    display["OI Change"] = display["OI Change"].map(lambda x: fmt_signed_num(x, 0))
+    return display
+
+
+def style_session_table(view: pd.DataFrame) -> pd.io.formats.style.Styler:
+    if view.empty:
+        return view.style
+
+    def row_style(row: pd.Series) -> list[str]:
+        styles = [""] * len(row)
+        if "Level Break" in row.index:
+            val = str(row["Level Break"])
+            if "D.H.B." in val:
+                styles[row.index.get_loc("Level Break")] = "background-color: #dcfce7; color: #166534; font-weight: 800; border-radius: 999px;"
+            elif "D.L.B." in val:
+                styles[row.index.get_loc("Level Break")] = "background-color: #fee2e2; color: #991b1b; font-weight: 800; border-radius: 999px;"
+        for col in ["Total Chng. In OI", "LTP Change", "OI Change"]:
+            if col in row.index:
+                value = str(row[col])
+                if value.startswith("+"):
+                    styles[row.index.get_loc(col)] = "color: #2f9e5b; font-weight: 700;"
+                elif value.startswith("-"):
+                    styles[row.index.get_loc(col)] = "color: #d44949; font-weight: 700;"
+        return styles
+
+    styler = view.style.apply(row_style, axis=1)
+    styler = styler.set_table_styles(
+        [
+            {"selector": "table", "props": [("border-collapse", "collapse"), ("width", "100%")]},
+            {"selector": "thead th", "props": [("background-color", "#f5f2eb"), ("font-family", "Space Grotesk, sans-serif"), ("font-weight", "800"), ("color", "#6b7280"), ("border-bottom", "1px solid rgba(31, 41, 55, 0.12)")]},
+            {"selector": "tbody td", "props": [("border-bottom", "1px solid rgba(31, 41, 55, 0.08)"), ("padding", "0.85rem 0.7rem"), ("font-size", "0.95rem")]},
+        ]
+    )
+    return styler
 
 
 def metric_card(label: str, value: str, sub: str, tone: str = "neutral") -> None:
@@ -632,6 +719,30 @@ def metric_card(label: str, value: str, sub: str, tone: str = "neutral") -> None
           <div class="metric-label">{label}</div>
           <div class="metric-value">{value}</div>
           <div class="metric-sub">{sub}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def mini_stat(label: str, value: str, tone: str = "neutral") -> None:
+    st.markdown(
+        f"""
+        <div class="mini-stat mini-{tone}">
+          <span>{label}</span>
+          <strong>{value}</strong>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def section_card(title: str, body: str) -> None:
+    st.markdown(
+        f"""
+        <div class="section-card">
+          <div class="section-card-title">{title}</div>
+          <div class="section-card-body">{body}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -719,6 +830,50 @@ def inject_style() -> None:
             color: var(--muted);
             font-size: 0.86rem;
         }
+        .mini-stat {
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            padding: 0.85rem 0.95rem;
+            background: rgba(255, 255, 255, 0.72);
+            box-shadow: 0 12px 30px rgba(15, 23, 42, 0.05);
+        }
+        .mini-stat span {
+            display: block;
+            color: var(--muted);
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            margin-bottom: 0.3rem;
+        }
+        .mini-stat strong {
+            display: block;
+            font-family: "Space Grotesk", sans-serif;
+            font-size: 1.05rem;
+            line-height: 1.25;
+        }
+        .mini-good { border-color: rgba(47, 158, 91, 0.24); background: rgba(47, 158, 91, 0.08); }
+        .mini-bad { border-color: rgba(212, 73, 73, 0.24); background: rgba(212, 73, 73, 0.08); }
+        .mini-neutral { border-color: rgba(184, 132, 18, 0.24); background: rgba(184, 132, 18, 0.08); }
+        .section-card {
+            border: 1px solid var(--line);
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.72);
+            padding: 1rem 1rem 0.9rem;
+            box-shadow: 0 12px 30px rgba(15, 23, 42, 0.05);
+        }
+        .section-card-title {
+            font-family: "Space Grotesk", sans-serif;
+            font-weight: 700;
+            font-size: 1.02rem;
+            margin-bottom: 0.65rem;
+            color: var(--text);
+        }
+        .section-card-body {
+            color: var(--text);
+            font-size: 0.95rem;
+            line-height: 1.55;
+            word-break: break-word;
+        }
         .good { color: var(--good); }
         .bad { color: var(--bad); }
         .neutral { color: var(--warn); }
@@ -737,6 +892,24 @@ def inject_style() -> None:
             border-radius: 18px;
             overflow: hidden;
             border: 1px solid var(--line);
+        }
+        .strike-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            flex-wrap: wrap;
+        }
+        .strike-pill span {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.35rem 0.65rem;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.72);
+            margin: 0.18rem 0.25rem 0 0;
+            font-size: 0.82rem;
+            font-weight: 700;
         }
         </style>
         """,
@@ -908,35 +1081,59 @@ def main() -> None:
                 "good" if safe_float(snapshot.get("strength_pct")) >= 0 else "bad",
             )
 
-        top_left, top_right = st.columns([1.9, 1.1])
-        with top_left:
-            st.markdown("### Trending OI")
-            selected_text = ", ".join(str(x) for x in selected) if selected else "-"
-            st.caption(f"Selected Strike Prices: {selected_text}")
-            st.dataframe(view, use_container_width=True, height=520, hide_index=True)
-        with top_right:
-            st.markdown("### Snapshot")
-            st.write(
-                {
-                    "Symbol": controls["symbol"],
-                    "Mode": controls["mode"],
-                    "Expiry": controls["expiry_date"],
-                    "Interval": controls["interval_label"],
-                    "Storage": storage_source(),
-                    "Rows": int(len(view)),
-                    "Credentials": fyers_credentials_source(),
-                }
-            )
-            st.markdown("### Underlying")
-            st.write(
-                {
-                    "Spot": fmt_num(snapshot.get("underlying_ltp"), 2),
-                    "Change": fmt_num(snapshot.get("underlying_change"), 2),
-                    "Change %": fmt_pct(snapshot.get("underlying_change_pct"), 2),
-                    "CE OI": fmt_num(snapshot.get("total_ce_oi"), 0),
-                    "PE OI": fmt_num(snapshot.get("total_pe_oi"), 0),
-                }
-            )
+        summary_left, summary_mid, summary_right = st.columns([1.2, 1.0, 1.0])
+        with summary_left:
+            mini_stat("Symbol", f"{controls['symbol']} • {symbol_cfg['label']}", "neutral")
+        with summary_mid:
+            mini_stat("Expiry", controls["expiry_date"], "neutral")
+        with summary_right:
+            mini_stat("Storage", storage_source(), "neutral")
+
+        st.markdown("### Trending OI")
+        strike_html = " ".join(f"<span>{x}</span>" for x in selected) if selected else "<span>None</span>"
+        st.markdown(f"<div class='strike-pill'>{strike_html}</div>", unsafe_allow_html=True)
+
+        display_view = format_table_display(view)
+        table_height = 240 if display_view.empty else min(720, 120 + max(len(display_view), 1) * 42)
+        st.dataframe(
+            style_session_table(display_view),
+            use_container_width=True,
+            height=table_height,
+            hide_index=True,
+            column_config={
+                "#": st.column_config.NumberColumn("#", width="small"),
+                "Date Time": st.column_config.TextColumn("Date Time", width="medium"),
+                "Total OI": st.column_config.TextColumn("Total OI", width="small"),
+                "Total Chng. In OI": st.column_config.TextColumn("Total Chng. In OI", width="medium"),
+                "Day High": st.column_config.TextColumn("Day High", width="small"),
+                "Day Low": st.column_config.TextColumn("Day Low", width="small"),
+                "Level Break": st.column_config.TextColumn("Level Break", width="large"),
+                "Volume": st.column_config.TextColumn("Volume", width="small"),
+                "LTP": st.column_config.TextColumn("LTP", width="small"),
+                "LTP Change": st.column_config.TextColumn("LTP Change", width="small"),
+                "OI Change": st.column_config.TextColumn("OI Change", width="small"),
+            },
+        )
+
+        with st.expander("Snapshot details", expanded=False):
+            info_cols = st.columns(3)
+            with info_cols[0]:
+                mini_stat("Mode", controls["mode"].title(), "neutral")
+                mini_stat("Interval", controls["interval_label"], "neutral")
+            with info_cols[1]:
+                mini_stat("Rows", str(int(len(view))), "neutral")
+                mini_stat("Credentials", fyers_credentials_source(), "neutral")
+            with info_cols[2]:
+                mini_stat("Spot", fmt_num(snapshot.get("underlying_ltp"), 2), "good" if safe_float(snapshot.get("underlying_change")) >= 0 else "bad")
+                mini_stat("Change", f"{fmt_signed_num(snapshot.get('underlying_change'), 2)} ({fmt_pct(snapshot.get('underlying_change_pct'), 2)})", "good" if safe_float(snapshot.get("underlying_change")) >= 0 else "bad")
+            st.markdown("#### Underlying Totals")
+            t1, t2, t3 = st.columns(3)
+            with t1:
+                mini_stat("CE OI", fmt_num(snapshot.get("total_ce_oi"), 0), "neutral")
+            with t2:
+                mini_stat("PE OI", fmt_num(snapshot.get("total_pe_oi"), 0), "neutral")
+            with t3:
+                mini_stat("Net PCR", fmt_num(snapshot.get("net_pcr"), 2), "neutral")
     else:
         st.warning("No snapshot loaded yet.")
 
