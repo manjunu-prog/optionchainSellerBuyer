@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -26,6 +28,59 @@ IST = ZoneInfo("Asia/Kolkata")
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "data" / "trending_oi_cache.sqlite3"
 TABLE_NAME = "trending_oi_snapshots"
+NIFTY50_CONSTITUENTS_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty50list.csv"
+NIFTY50_FALLBACK_SYMBOLS = [
+    "ADANIENT",
+    "ADANIPORTS",
+    "APOLLOHOSP",
+    "ASIANPAINT",
+    "AXISBANK",
+    "BAJAJ-AUTO",
+    "BAJFINANCE",
+    "BAJAJFINSV",
+    "BEL",
+    "BHARTIARTL",
+    "BPCL",
+    "BRITANNIA",
+    "CIPLA",
+    "COALINDIA",
+    "DRREDDY",
+    "EICHERMOT",
+    "GRASIM",
+    "HCLTECH",
+    "HDFCBANK",
+    "HEROMOTOCO",
+    "HINDALCO",
+    "HINDUNILVR",
+    "ICICIBANK",
+    "INDUSINDBK",
+    "INFY",
+    "ITC",
+    "JSWSTEEL",
+    "KOTAKBANK",
+    "LT",
+    "M&M",
+    "MARUTI",
+    "NESTLEIND",
+    "NTPC",
+    "ONGC",
+    "POWERGRID",
+    "RELIANCE",
+    "SBILIFE",
+    "SBIN",
+    "SHRIRAMFIN",
+    "SUNPHARMA",
+    "TCS",
+    "TATACONSUM",
+    "TATAMOTORS",
+    "TATASTEEL",
+    "TECHM",
+    "TITAN",
+    "ULTRACEMCO",
+    "WIPRO",
+    "TRENT",
+    "ONGC",
+]
 
 SYMBOLS = {
     "NIFTY": {"symbol": "NSE:NIFTY50-INDEX", "label": "NIFTY 50", "step": 50},
@@ -307,6 +362,288 @@ def fetch_option_chain(client: FyersDataClient, symbol: str, strike_span: int) -
     if chain_resp.get("s") != "ok":
         raise RuntimeError(chain_resp.get("message", "Unable to fetch FYERS option chain."))
     return spot, chain_resp.get("data", {}).get("optionsChain", [])
+
+
+def detect_order_blocks(
+    candles: pd.DataFrame,
+    spot: float,
+    lb: int = 5,
+    per_side_limit: int = 3,
+    display_date: Any | None = None,
+    keep_earliest: bool = True,
+    reference_label: str = "spot",
+) -> pd.DataFrame:
+    if candles.empty or len(candles) < (lb * 2) + 2:
+        return pd.DataFrame(columns=["Type", "Zone", "Low", "High", "CreatedTS", "Created", "Distance", "Status"])
+
+    frame = candles.sort_values("timestamp").reset_index(drop=True).copy()
+    pivot_highs: dict[int, float] = {}
+    pivot_lows: dict[int, float] = {}
+    for i in range(lb, len(frame) - lb):
+        high_window = frame.loc[i - lb : i + lb, "high"]
+        low_window = frame.loc[i - lb : i + lb, "low"]
+        if frame.at[i, "high"] == high_window.max():
+            pivot_highs[i + lb] = float(frame.at[i, "high"])
+        if frame.at[i, "low"] == low_window.min():
+            pivot_lows[i + lb] = float(frame.at[i, "low"])
+
+    last_swing_high: float | None = None
+    last_swing_low: float | None = None
+    last_red_idx: int | None = None
+    last_green_idx: int | None = None
+    order_blocks: list[dict[str, Any]] = []
+
+    for i, row in frame.iterrows():
+        if i in pivot_highs:
+            last_swing_high = pivot_highs[i]
+        if i in pivot_lows:
+            last_swing_low = pivot_lows[i]
+
+        previous_close = float(frame.at[i - 1, "close"]) if i > 0 else float(row["close"])
+        close = float(row["close"])
+
+        if last_swing_high is not None and previous_close <= last_swing_high < close and last_red_idx is not None:
+            candle = frame.loc[last_red_idx]
+            order_blocks.append(
+                {
+                    "type": "Bullish OB",
+                    "low": float(candle["low"]),
+                    "high": float(candle["high"]),
+                    "created": candle["timestamp"],
+                }
+            )
+            last_swing_high = None
+
+        if last_swing_low is not None and previous_close >= last_swing_low > close and last_green_idx is not None:
+            candle = frame.loc[last_green_idx]
+            order_blocks.append(
+                {
+                    "type": "Bearish OB",
+                    "low": float(candle["low"]),
+                    "high": float(candle["high"]),
+                    "created": candle["timestamp"],
+                }
+            )
+            last_swing_low = None
+
+        if close > float(row["open"]):
+            last_green_idx = i
+        elif close < float(row["open"]):
+            last_red_idx = i
+
+    rows: list[dict[str, Any]] = []
+    for zone in order_blocks:
+        created_ts = pd.to_datetime(zone["created"])
+        if zone["low"] <= spot <= zone["high"]:
+            status = f"{reference_label.title()} inside zone"
+            distance = 0.0
+        elif spot < zone["low"]:
+            status = f"Above {reference_label}"
+            distance = zone["low"] - spot
+        else:
+            status = f"Below {reference_label}"
+            distance = spot - zone["high"]
+        rows.append(
+            {
+                "Type": zone["type"],
+                "Zone": f"{zone['low']:,.2f} - {zone['high']:,.2f}",
+                "Low": zone["low"],
+                "High": zone["high"],
+                "CreatedTS": created_ts,
+                "Created": created_ts.strftime("%d %b %H:%M") if display_date is None else created_ts.strftime("%H:%M"),
+                "Distance": distance,
+                "Status": status,
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame(columns=["Type", "Zone", "Low", "High", "CreatedTS", "Created", "Distance", "Status"])
+
+    zones = pd.DataFrame(rows)
+    if display_date is not None:
+        same_day = zones["CreatedTS"].dt.date == display_date
+        if same_day.any():
+            zones = zones.loc[same_day].copy()
+
+    selected_parts: list[pd.DataFrame] = []
+    for _, side_frame in zones.groupby("Type", sort=False):
+        if keep_earliest:
+            earliest = side_frame.sort_values("CreatedTS", ascending=True).head(1)
+            remaining = side_frame.drop(index=earliest.index)
+            closest = remaining.sort_values(["Distance", "CreatedTS"], ascending=[True, False]).head(max(per_side_limit - 1, 0))
+            selected_parts.append(pd.concat([earliest, closest]))
+        else:
+            closest = side_frame.sort_values(["Distance", "CreatedTS"], ascending=[True, False]).head(per_side_limit)
+            selected_parts.append(closest)
+
+    selected = pd.concat(selected_parts) if selected_parts else zones.head(0)
+    return selected.sort_values("CreatedTS", ascending=False).reset_index(drop=True)
+
+
+def load_nifty50_universe() -> pd.DataFrame:
+    try:
+        response = requests.get(
+            NIFTY50_CONSTITUENTS_URL,
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=20,
+        )
+        response.raise_for_status()
+        frame = pd.read_csv(io.StringIO(response.text))
+    except Exception:
+        frame = pd.DataFrame({"company_name": NIFTY50_FALLBACK_SYMBOLS, "symbol": NIFTY50_FALLBACK_SYMBOLS})
+    frame = frame.rename(columns=lambda col: str(col).strip())
+    symbol_col = "Symbol" if "Symbol" in frame.columns else frame.columns[0]
+    name_col = "Company Name" if "Company Name" in frame.columns else frame.columns[0]
+    cleaned = frame[[name_col, symbol_col]].copy()
+    cleaned.columns = ["company_name", "symbol"]
+    cleaned["company_name"] = cleaned["company_name"].astype(str).str.strip()
+    cleaned["symbol"] = cleaned["symbol"].astype(str).str.strip()
+    cleaned = cleaned[cleaned["symbol"].str.len() > 0]
+    cleaned["fyers_symbol"] = cleaned["symbol"].map(lambda sym: f"NSE:{sym}-EQ")
+    cleaned = cleaned.drop_duplicates(subset=["symbol"]).reset_index(drop=True)
+    return cleaned
+
+
+def scan_stock_order_block(
+    client: FyersDataClient,
+    row: pd.Series,
+    resolution: str = "3",
+    lookback_days: int = 5,
+) -> dict[str, Any] | None:
+    symbol = str(row["symbol"]).strip()
+    fyers_symbol = str(row["fyers_symbol"]).strip()
+    company_name = str(row["company_name"]).strip()
+    end_date = now_ist().date()
+    start_date = end_date - timedelta(days=lookback_days)
+
+    try:
+        candles = client.fetch_history(fyers_symbol, resolution, start_date.isoformat(), end_date.isoformat())
+    except Exception as exc:
+        return {
+            "symbol": symbol,
+            "company_name": company_name,
+            "fyers_symbol": fyers_symbol,
+            "error": str(exc),
+        }
+
+    if candles.empty:
+        return {
+            "symbol": symbol,
+            "company_name": company_name,
+            "fyers_symbol": fyers_symbol,
+            "error": "No candles returned.",
+        }
+
+    spot = safe_float(candles.iloc[-1]["close"])
+    zones = detect_order_blocks(candles, spot, display_date=end_date, reference_label="spot")
+    if zones.empty:
+        return {
+            "symbol": symbol,
+            "company_name": company_name,
+            "fyers_symbol": fyers_symbol,
+            "spot": spot,
+            "bullish": None,
+            "bearish": None,
+            "latest_type": None,
+            "latest_time": None,
+        }
+
+    bullish = zones.loc[zones["Type"] == "Bullish OB"].sort_values("CreatedTS")
+    bearish = zones.loc[zones["Type"] == "Bearish OB"].sort_values("CreatedTS")
+    latest_bull = bullish.iloc[-1].to_dict() if not bullish.empty else None
+    latest_bear = bearish.iloc[-1].to_dict() if not bearish.empty else None
+
+    latest_type = None
+    latest_time = None
+    latest_zone = None
+    if latest_bull and latest_bear:
+        if pd.to_datetime(latest_bull["CreatedTS"]) >= pd.to_datetime(latest_bear["CreatedTS"]):
+            latest_type = "Bullish OB"
+            latest_time = latest_bull["CreatedTS"]
+            latest_zone = latest_bull
+        else:
+            latest_type = "Bearish OB"
+            latest_time = latest_bear["CreatedTS"]
+            latest_zone = latest_bear
+    elif latest_bull:
+        latest_type = "Bullish OB"
+        latest_time = latest_bull["CreatedTS"]
+        latest_zone = latest_bull
+    elif latest_bear:
+        latest_type = "Bearish OB"
+        latest_time = latest_bear["CreatedTS"]
+        latest_zone = latest_bear
+
+    return {
+        "symbol": symbol,
+        "company_name": company_name,
+        "fyers_symbol": fyers_symbol,
+        "spot": spot,
+        "latest_type": latest_type,
+        "latest_time": latest_time,
+        "latest_zone": latest_zone,
+        "bullish": latest_bull,
+        "bearish": latest_bear,
+        "candles": len(candles),
+    }
+
+
+def scan_nifty50_order_blocks(
+    client: FyersDataClient,
+    resolution: str = "3",
+    lookback_days: int = 5,
+    max_workers: int = 6,
+) -> dict[str, list[dict[str, Any]]]:
+    universe = load_nifty50_universe()
+    bullish_rows: list[dict[str, Any]] = []
+    bearish_rows: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(scan_stock_order_block, client, row, resolution, lookback_days): row
+            for _, row in universe.iterrows()
+        }
+        for future in as_completed(futures):
+            result = future.result()
+            if not result:
+                continue
+            if result.get("error"):
+                errors.append(result)
+                continue
+
+            latest_type = result.get("latest_type")
+            latest_zone = result.get("latest_zone") or {}
+            if latest_type == "Bullish OB":
+                bullish_rows.append(
+                    {
+                        "Symbol": result["symbol"],
+                        "Company": result["company_name"],
+                        "Spot": result["spot"],
+                        "Created": latest_zone.get("Created"),
+                        "Zone": latest_zone.get("Zone", "-"),
+                        "Status": latest_zone.get("Status", "-"),
+                        "Distance": latest_zone.get("Distance", 0.0),
+                        "Candles": result.get("candles", 0),
+                    }
+                )
+            elif latest_type == "Bearish OB":
+                bearish_rows.append(
+                    {
+                        "Symbol": result["symbol"],
+                        "Company": result["company_name"],
+                        "Spot": result["spot"],
+                        "Created": latest_zone.get("Created"),
+                        "Zone": latest_zone.get("Zone", "-"),
+                        "Status": latest_zone.get("Status", "-"),
+                        "Distance": latest_zone.get("Distance", 0.0),
+                        "Candles": result.get("candles", 0),
+                    }
+                )
+
+    bullish_rows = sorted(bullish_rows, key=lambda row: row.get("Created", ""), reverse=True)
+    bearish_rows = sorted(bearish_rows, key=lambda row: row.get("Created", ""), reverse=True)
+    return {"bullish": bullish_rows, "bearish": bearish_rows, "errors": errors}
 
 
 def normalize_history_frame(frame: pd.DataFrame) -> pd.DataFrame:
@@ -684,14 +1021,18 @@ def style_session_table(view: pd.DataFrame) -> pd.io.formats.style.Styler:
     if view.empty:
         return view.style
 
+    volume_cutoff = safe_float(view["Volume"].quantile(0.75)) if "Volume" in view.columns and not view.empty else 0.0
+
     def row_style(row: pd.Series) -> list[str]:
         styles = [""] * len(row)
         if "Level Break" in row.index:
             val = str(row["Level Break"])
             if "D.H.B." in val:
-                styles[row.index.get_loc("Level Break")] = "background-color: #dcfce7; color: #166534; font-weight: 800; border-radius: 999px;"
+                styles[row.index.get_loc("Level Break")] = "background-color: #55b65e; color: #ffffff; font-weight: 800; border-radius: 999px;"
             elif "D.L.B." in val:
-                styles[row.index.get_loc("Level Break")] = "background-color: #fee2e2; color: #991b1b; font-weight: 800; border-radius: 999px;"
+                styles[row.index.get_loc("Level Break")] = "background-color: #ef4d3f; color: #ffffff; font-weight: 800; border-radius: 999px;"
+        if "Volume" in row.index and safe_float(row["Volume"]) >= volume_cutoff and volume_cutoff > 0:
+            styles[row.index.get_loc("Volume")] = "background-color: #f6c343; color: #5c3d00; font-weight: 800; border-radius: 8px;"
         for col in ["Total Chng. In OI", "LTP Change", "OI Change"]:
             if col in row.index:
                 value = str(row[col])
@@ -702,11 +1043,53 @@ def style_session_table(view: pd.DataFrame) -> pd.io.formats.style.Styler:
         return styles
 
     styler = view.style.apply(row_style, axis=1)
+    styler = styler.format(
+        {
+            "Total OI": lambda v: fmt_num(v, 0),
+            "Total Chng. In OI": lambda v: fmt_signed_num(v, 0),
+            "Day High": lambda v: fmt_num(v, 2),
+            "Day Low": lambda v: fmt_num(v, 2),
+            "Volume": lambda v: fmt_num(v, 0),
+            "LTP": lambda v: fmt_num(v, 2),
+            "LTP Change": lambda v: fmt_signed_num(v, 2),
+            "OI Change": lambda v: fmt_signed_num(v, 0),
+        }
+    )
     styler = styler.set_table_styles(
         [
             {"selector": "table", "props": [("border-collapse", "collapse"), ("width", "100%")]},
-            {"selector": "thead th", "props": [("background-color", "#f5f2eb"), ("font-family", "Space Grotesk, sans-serif"), ("font-weight", "800"), ("color", "#6b7280"), ("border-bottom", "1px solid rgba(31, 41, 55, 0.12)")]},
+            {"selector": "thead th", "props": [("background-color", "#f5f2eb"), ("font-family", "Space Grotesk, sans-serif"), ("font-weight", "800"), ("color", "#8f8684"), ("border-bottom", "1px solid rgba(31, 41, 55, 0.12)")]},
             {"selector": "tbody td", "props": [("border-bottom", "1px solid rgba(31, 41, 55, 0.08)"), ("padding", "0.85rem 0.7rem"), ("font-size", "0.95rem")]},
+        ]
+    )
+    return styler
+
+
+def style_ob_scan_table(view: pd.DataFrame, tone: str) -> pd.io.formats.style.Styler:
+    if view.empty:
+        return view.style
+
+    def row_style(row: pd.Series) -> list[str]:
+        base = "background-color: rgba(255,255,255,0.95); color: #5c5251;"
+        if tone == "bullish":
+            base = "background-color: rgba(85, 182, 94, 0.08); color: #5c5251;"
+        elif tone == "bearish":
+            base = "background-color: rgba(239, 77, 63, 0.08); color: #5c5251;"
+        return [base] * len(row)
+
+    styler = view.style.apply(row_style, axis=1)
+    styler = styler.format(
+        {
+            "Spot": lambda v: fmt_num(v, 2),
+            "Distance": lambda v: fmt_num(v, 2),
+            "Candles": lambda v: fmt_num(v, 0),
+        }
+    )
+    styler = styler.set_table_styles(
+        [
+            {"selector": "table", "props": [("border-collapse", "collapse"), ("width", "100%")]},
+            {"selector": "thead th", "props": [("background-color", "#f5f2eb"), ("font-family", "Space Grotesk, sans-serif"), ("font-weight", "800"), ("color", "#8f8684"), ("border-bottom", "1px solid rgba(31, 41, 55, 0.12)")]},
+            {"selector": "tbody td", "props": [("border-bottom", "1px solid rgba(31, 41, 55, 0.08)"), ("padding", "0.7rem 0.65rem"), ("font-size", "0.92rem")]},
         ]
     )
     return styler
@@ -965,6 +1348,11 @@ def render_sidebar() -> dict[str, Any]:
         strike_span = st.selectbox("Strike Span", [7, 9, 11, 13, 15, 17, 19], index=4)
         refresh_seconds = st.slider("Refresh Seconds", 15, 300, 60, 15)
         auto_refresh = st.checkbox("Auto refresh live data", value=True)
+        st.markdown("---")
+        scan_nifty50 = st.checkbox("Scan Nifty 50 OBs", value=True)
+        scan_lookback_days = st.slider("OB Lookback Days", 2, 8, 5, 1)
+        scan_workers = st.slider("OB Scan Workers", 2, 10, 6, 1)
+        scan_now = st.button("Run Nifty 50 Scan", use_container_width=True)
         run = st.button("Go", use_container_width=True)
         reset_strikes = st.button("Change Strike Prices", use_container_width=True)
         st.markdown("---")
@@ -979,6 +1367,10 @@ def render_sidebar() -> dict[str, Any]:
         "strike_span": int(strike_span),
         "refresh_seconds": int(refresh_seconds),
         "auto_refresh": auto_refresh,
+        "scan_nifty50": scan_nifty50,
+        "scan_lookback_days": int(scan_lookback_days),
+        "scan_workers": int(scan_workers),
+        "scan_now": scan_now,
         "run": run,
         "reset_strikes": reset_strikes,
     }
@@ -991,6 +1383,7 @@ def main() -> None:
     controls = render_sidebar()
     symbol_cfg = SYMBOLS[controls["symbol"]]
     interval_minutes = INTERVALS[controls["interval_label"]]
+    client: FyersDataClient | None = None
 
     if "selected_strikes" not in st.session_state:
         st.session_state.selected_strikes = []
@@ -1129,10 +1522,9 @@ def main() -> None:
         strike_html = " ".join(f"<span>{x}</span>" for x in selected) if selected else "<span>None</span>"
         st.markdown(f"<div class='strike-pill'>{strike_html}</div>", unsafe_allow_html=True)
 
-        display_view = format_table_display(view)
-        table_height = 240 if display_view.empty else min(720, 120 + max(len(display_view), 1) * 42)
+        table_height = 240 if view.empty else min(720, 120 + max(len(view), 1) * 42)
         st.dataframe(
-            style_session_table(display_view),
+            style_session_table(view),
             use_container_width=True,
             height=table_height,
             hide_index=True,
@@ -1170,6 +1562,67 @@ def main() -> None:
                 mini_stat("PE OI", fmt_num(snapshot.get("total_pe_oi"), 0), "neutral")
             with t3:
                 mini_stat("Net PCR", fmt_num(snapshot.get("net_pcr"), 2), "neutral")
+
+        if controls["scan_nifty50"]:
+            st.markdown("### Nifty 50 OB Scanner")
+            scan_meta_left, scan_meta_mid, scan_meta_right = st.columns(3)
+            with scan_meta_left:
+                mini_stat("Universe", "NIFTY 50", "neutral")
+            with scan_meta_mid:
+                mini_stat("Candles", "3 min", "neutral")
+            with scan_meta_right:
+                mini_stat("Mode", "Live scan", "neutral")
+
+            should_scan = controls["scan_now"] or ("nifty50_ob_scan" not in st.session_state)
+            if should_scan:
+                with st.spinner("Scanning Nifty 50 stocks for bullish and bearish order blocks..."):
+                    if client is None:
+                        client = FyersDataClient.from_env()
+                    st.session_state.nifty50_ob_scan = scan_nifty50_order_blocks(
+                        client,
+                        resolution="3",
+                        lookback_days=controls["scan_lookback_days"],
+                        max_workers=controls["scan_workers"],
+                    )
+
+            scan_results = st.session_state.get("nifty50_ob_scan", {"bullish": [], "bearish": [], "errors": []})
+            bull_df = pd.DataFrame(scan_results.get("bullish", []))
+            bear_df = pd.DataFrame(scan_results.get("bearish", []))
+            error_count = len(scan_results.get("errors", []))
+
+            counts_cols = st.columns(4)
+            with counts_cols[0]:
+                metric_card("Bullish OBs", str(len(bull_df)), "Stocks whose latest OB is bullish", "good")
+            with counts_cols[1]:
+                metric_card("Bearish OBs", str(len(bear_df)), "Stocks whose latest OB is bearish", "bad")
+            with counts_cols[2]:
+                metric_card("No OB", str(max(0, 50 - len(bull_df) - len(bear_df))), "No active OB found", "neutral")
+            with counts_cols[3]:
+                metric_card("Scan Errors", str(error_count), "Fetch issues / missing candles", "neutral" if error_count == 0 else "bad")
+
+            left_col, right_col = st.columns(2, gap="large")
+            with left_col:
+                st.markdown("#### Bullish OBs")
+                if bull_df.empty:
+                    st.info("No stocks currently show a latest bullish OB.")
+                else:
+                    st.dataframe(
+                        style_ob_scan_table(bull_df.head(15), "bullish"),
+                        use_container_width=True,
+                        hide_index=True,
+                        height=min(650, 140 + len(bull_df.head(15)) * 44),
+                    )
+            with right_col:
+                st.markdown("#### Bearish OBs")
+                if bear_df.empty:
+                    st.info("No stocks currently show a latest bearish OB.")
+                else:
+                    st.dataframe(
+                        style_ob_scan_table(bear_df.head(15), "bearish"),
+                        use_container_width=True,
+                        hide_index=True,
+                        height=min(650, 140 + len(bear_df.head(15)) * 44),
+                    )
     else:
         st.warning("No snapshot loaded yet.")
 
