@@ -1057,9 +1057,10 @@ def style_session_table(view: pd.DataFrame) -> pd.io.formats.style.Styler:
     )
     styler = styler.set_table_styles(
         [
-            {"selector": "table", "props": [("border-collapse", "collapse"), ("width", "100%")]},
-            {"selector": "thead th", "props": [("background-color", "#f5f2eb"), ("font-family", "Space Grotesk, sans-serif"), ("font-weight", "800"), ("color", "#8f8684"), ("border-bottom", "1px solid rgba(31, 41, 55, 0.12)")]},
-            {"selector": "tbody td", "props": [("border-bottom", "1px solid rgba(31, 41, 55, 0.08)"), ("padding", "0.85rem 0.7rem"), ("font-size", "0.95rem")]},
+            {"selector": "table", "props": [("border-collapse", "collapse"), ("width", "100%"), ("background-color", "#ffffff")]},
+            {"selector": "thead th", "props": [("background-color", "#f8f5ef"), ("font-family", "Space Grotesk, sans-serif"), ("font-weight", "800"), ("color", "#8b7f7b"), ("border-bottom", "1px solid rgba(31, 41, 55, 0.10)")]},
+            {"selector": "tbody td", "props": [("border-bottom", "1px solid rgba(31, 41, 55, 0.08)"), ("padding", "0.85rem 0.7rem"), ("font-size", "0.95rem"), ("background-color", "#ffffff"), ("color", "#5c5251")]},
+            {"selector": "tbody tr:nth-child(even) td", "props": [("background-color", "#fcfbf8")]},
         ]
     )
     return styler
@@ -1070,11 +1071,11 @@ def style_ob_scan_table(view: pd.DataFrame, tone: str) -> pd.io.formats.style.St
         return view.style
 
     def row_style(row: pd.Series) -> list[str]:
-        base = "background-color: rgba(255,255,255,0.95); color: #5c5251;"
+        base = "background-color: #ffffff; color: #5c5251;"
         if tone == "bullish":
-            base = "background-color: rgba(85, 182, 94, 0.08); color: #5c5251;"
+            base = "background-color: #f6fbf6; color: #5c5251;"
         elif tone == "bearish":
-            base = "background-color: rgba(239, 77, 63, 0.08); color: #5c5251;"
+            base = "background-color: #fff7f6; color: #5c5251;"
         return [base] * len(row)
 
     styler = view.style.apply(row_style, axis=1)
@@ -1087,9 +1088,10 @@ def style_ob_scan_table(view: pd.DataFrame, tone: str) -> pd.io.formats.style.St
     )
     styler = styler.set_table_styles(
         [
-            {"selector": "table", "props": [("border-collapse", "collapse"), ("width", "100%")]},
-            {"selector": "thead th", "props": [("background-color", "#f5f2eb"), ("font-family", "Space Grotesk, sans-serif"), ("font-weight", "800"), ("color", "#8f8684"), ("border-bottom", "1px solid rgba(31, 41, 55, 0.12)")]},
-            {"selector": "tbody td", "props": [("border-bottom", "1px solid rgba(31, 41, 55, 0.08)"), ("padding", "0.7rem 0.65rem"), ("font-size", "0.92rem")]},
+            {"selector": "table", "props": [("border-collapse", "collapse"), ("width", "100%"), ("background-color", "#ffffff")]},
+            {"selector": "thead th", "props": [("background-color", "#f8f5ef"), ("font-family", "Space Grotesk, sans-serif"), ("font-weight", "800"), ("color", "#8b7f7b"), ("border-bottom", "1px solid rgba(31, 41, 55, 0.10)")]},
+            {"selector": "tbody td", "props": [("border-bottom", "1px solid rgba(31, 41, 55, 0.08)"), ("padding", "0.7rem 0.65rem"), ("font-size", "0.92rem"), ("background-color", "#ffffff"), ("color", "#5c5251")]},
+            {"selector": "tbody tr:nth-child(even) td", "props": [("background-color", "#fcfbf8")]},
         ]
     )
     return styler
@@ -1277,6 +1279,21 @@ def inject_style() -> None:
             overflow: hidden;
             border: 1px solid var(--line);
         }
+        div[data-testid="stDataFrame"] table {
+            background: #ffffff !important;
+            color: var(--text) !important;
+        }
+        div[data-testid="stDataFrame"] thead th,
+        div[data-testid="stDataFrame"] tbody td,
+        div[data-testid="stDataFrame"] tbody tr,
+        div[data-testid="stDataFrame"] tbody tr:nth-child(even) td {
+            background: #ffffff !important;
+            color: var(--text) !important;
+        }
+        div[data-testid="stDataFrame"] thead th {
+            background: #f8f5ef !important;
+            color: var(--muted) !important;
+        }
         .strike-pill {
             display: inline-flex;
             align-items: center;
@@ -1313,6 +1330,24 @@ def inject_style() -> None:
             background: rgba(255, 255, 255, 0.95) !important;
             border-color: var(--line) !important;
         }
+        .controls-panel {
+            border: 1px solid var(--line);
+            border-radius: 22px;
+            background: rgba(255, 255, 255, 0.93);
+            box-shadow: 0 16px 36px rgba(69, 58, 56, 0.06);
+            padding: 1rem 1rem 0.5rem;
+            margin-bottom: 1rem;
+        }
+        .controls-panel h3 {
+            margin: 0 0 0.25rem 0;
+            font-size: 1.12rem;
+            color: var(--text);
+        }
+        .controls-panel p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 0.9rem;
+        }
         button[kind="primary"] {
             background: linear-gradient(135deg, var(--accent), #de5645) !important;
             border: 1px solid rgba(198, 63, 47, 0.34) !important;
@@ -1336,28 +1371,57 @@ def inject_style() -> None:
     )
 
 
-def render_sidebar() -> dict[str, Any]:
-    with st.sidebar:
-        st.title("Trending OI")
-        st.caption("FYERS-backed option flow desk")
-        mode = st.radio("Mode", ["live", "historical"], horizontal=True, index=0)
-        symbol = st.selectbox("Name", list(SYMBOLS.keys()), index=0)
-        selected_date = st.date_input("Date", value=today_ist())
-        expiry_date = st.date_input("Expiry Date", value=next_weekly_expiry())
-        interval_label = st.selectbox("Time Interval", list(INTERVALS.keys()), index=2)
-        strike_span = st.selectbox("Strike Span", [7, 9, 11, 13, 15, 17, 19], index=4)
-        auto_refresh = st.checkbox("Auto refresh live data", value=True)
-        st.caption("Auto refresh cadence: 3 minutes")
-        st.markdown("---")
-        scan_nifty50 = st.checkbox("Scan Nifty 50 OBs", value=True)
-        scan_lookback_days = st.slider("OB Lookback Days", 2, 8, 5, 1)
-        scan_workers = st.slider("OB Scan Workers", 2, 10, 6, 1)
-        scan_now = st.button("Run Nifty 50 Scan", use_container_width=True)
-        run = st.button("Go", use_container_width=True)
-        reset_strikes = st.button("Change Strike Prices", use_container_width=True)
-        st.markdown("---")
-        st.caption(f"FYERS source: `{fyers_credentials_source()}`")
-        st.caption(f"Backup: `{storage_source()}`")
+def render_controls_panel() -> dict[str, Any]:
+    with st.container():
+        st.markdown(
+            """
+            <div class="controls-panel">
+              <h3>Controls & refresh</h3>
+              <p>If the sidebar feels hidden, use these controls here. Live mode refreshes every 3 minutes.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        row1 = st.columns([1.0, 1.15, 1.0, 0.9, 0.8, 0.8])
+        with row1[0]:
+            mode = st.radio("Mode", ["live", "historical"], horizontal=True, index=0)
+        with row1[1]:
+            symbol = st.selectbox("Name", list(SYMBOLS.keys()), index=0)
+        with row1[2]:
+            interval_label = st.selectbox("Time Interval", list(INTERVALS.keys()), index=2)
+        with row1[3]:
+            auto_refresh = st.checkbox("Auto refresh", value=True)
+        with row1[4]:
+            run = st.button("Go", use_container_width=True)
+        with row1[5]:
+            reset_strikes = st.button("Change Strike Prices", use_container_width=True)
+
+        row2 = st.columns([1.0, 1.0, 0.9, 1.0, 0.9, 0.9])
+        with row2[0]:
+            selected_date = st.date_input("Date", value=today_ist())
+        with row2[1]:
+            expiry_date = st.date_input("Expiry Date", value=next_weekly_expiry())
+        with row2[2]:
+            strike_span = st.selectbox("Strike Span", [7, 9, 11, 13, 15, 17, 19], index=4)
+        with row2[3]:
+            scan_nifty50 = st.checkbox("Scan Nifty 50 OBs", value=True)
+        with row2[4]:
+            scan_now = st.button("Run Nifty 50 Scan", use_container_width=True)
+        with row2[5]:
+            st.markdown(
+                "<div style='padding-top:1.95rem;color:#8f8684;font-size:0.82rem;font-weight:700;'>Auto refresh cadence: 3 min</div>",
+                unsafe_allow_html=True,
+            )
+
+        with st.expander("Scanner tuning", expanded=False):
+            tune_cols = st.columns(2)
+            with tune_cols[0]:
+                scan_lookback_days = st.slider("OB Lookback Days", 2, 8, 5, 1)
+            with tune_cols[1]:
+                scan_workers = st.slider("OB Scan Workers", 2, 10, 6, 1)
+            st.caption(f"FYERS source: `{fyers_credentials_source()}`  |  Backup: `{storage_source()}`")
+
     return {
         "mode": mode,
         "symbol": symbol,
@@ -1379,7 +1443,7 @@ def main() -> None:
     st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="expanded")
     inject_style()
 
-    controls = render_sidebar()
+    controls = render_controls_panel()
     symbol_cfg = SYMBOLS[controls["symbol"]]
     interval_minutes = INTERVALS[controls["interval_label"]]
     client: FyersDataClient | None = None
