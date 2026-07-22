@@ -90,7 +90,7 @@ SYMBOLS = {
     "SENSEX": {"symbol": "BSE:SENSEX-INDEX", "label": "SENSEX", "step": 100},
 }
 
-INTERVALS = {"1 min": 1, "5 min": 5, "15 min": 15, "30 min": 30}
+INTERVALS = {"5 min": 5, "10 min": 10, "15 min": 15}
 
 
 @dataclass(frozen=True)
@@ -1346,8 +1346,8 @@ def render_sidebar() -> dict[str, Any]:
         expiry_date = st.date_input("Expiry Date", value=next_weekly_expiry())
         interval_label = st.selectbox("Time Interval", list(INTERVALS.keys()), index=2)
         strike_span = st.selectbox("Strike Span", [7, 9, 11, 13, 15, 17, 19], index=4)
-        refresh_seconds = st.slider("Refresh Seconds", 15, 300, 60, 15)
         auto_refresh = st.checkbox("Auto refresh live data", value=True)
+        st.caption("Auto refresh cadence: 3 minutes")
         st.markdown("---")
         scan_nifty50 = st.checkbox("Scan Nifty 50 OBs", value=True)
         scan_lookback_days = st.slider("OB Lookback Days", 2, 8, 5, 1)
@@ -1365,7 +1365,6 @@ def render_sidebar() -> dict[str, Any]:
         "expiry_date": expiry_date.isoformat(),
         "interval_label": interval_label,
         "strike_span": int(strike_span),
-        "refresh_seconds": int(refresh_seconds),
         "auto_refresh": auto_refresh,
         "scan_nifty50": scan_nifty50,
         "scan_lookback_days": int(scan_lookback_days),
@@ -1377,7 +1376,7 @@ def render_sidebar() -> dict[str, Any]:
 
 
 def main() -> None:
-    st.set_page_config(page_title=APP_TITLE, layout="wide")
+    st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="expanded")
     inject_style()
 
     controls = render_sidebar()
@@ -1393,7 +1392,7 @@ def main() -> None:
         st.session_state.last_snapshot = None
 
     if controls["auto_refresh"] and controls["mode"] == "live" and st_autorefresh is not None:
-        st_autorefresh(interval=controls["refresh_seconds"] * 1000, key="trending_oi_auto_refresh")
+        st_autorefresh(interval=180_000, key="trending_oi_auto_refresh")
 
     if controls["reset_strikes"]:
         st.session_state.selected_strikes = []
@@ -1411,6 +1410,7 @@ def main() -> None:
               <span class="pill">Mode: {mode}</span>
               <span class="pill">{symbol}</span>
               <span class="pill">{interval} min</span>
+              <span class="pill">Refresh: 3 min</span>
             </div>
           </div>
         </div>
